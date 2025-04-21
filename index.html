@@ -1,0 +1,212 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <title>オセロゲーム（AI対戦）</title>
+
+    <!-- オセロ盤と石のスタイル設定 -->
+    <style>
+      table {
+          border-collapse: collapse;  /* 枠を1本に見せる */
+      }
+      td {
+          width: 50px;
+          height: 50px;
+          border: 1px solid black;
+          text-align: center;
+          vertical-align: middle;
+          font-size: 24px;
+          background-color: green;  /* オセロ盤の背景色 */
+          cursor: pointer;
+          position: relative;  /* 石(div)を中央に配置するために relative */
+      }
+
+      /* 石（黒と白）の共通スタイル */
+      .black, .white {
+          width: 40px;
+          height: 40px;
+          border-radius: 50%;  /* 丸い石にする */
+          position: absolute;
+          top: 5px;
+          left: 5px;
+      }
+
+      /* 黒石 */
+      .black {
+          background-color: black;
+      }
+
+      /* 白石 */
+      .white {
+          background-color: white;
+      }
+  </style>
+</head>
+<body>
+    <h1>オセロゲーム（AI対戦）</h1>
+
+<!-- オセロ盤(JavaScriptで描画) -->
+    <table id="board"></table>
+
+    <!-- 現在の手番やメッセージ表示領域 -->
+    <div id="status"></div>
+    <div id="messages" style="margin: 10px 0; color: red;"></div>
+
+    <!-- 操作ボタン -->
+    <div style="margin-bottom: 10px;">
+      <button onclick="resetGame()">🔁 リセット</button>
+      <button id="endBtn">⛔ 終了</button>
+    </div>
+
+    <!-- 効果音オブジェクト -->
+    <audio id="place-sound" src="{{ url_for('static', filename='othello.wav') }}"></audio>
+
+        <script>
+        // DOMの要素を取得
+        const boardElement = document.getElementById("board");
+        const statusElement = document.getElementById("status");
+        const messagesElement = document.getElementById("messages");
+
+        // ゲーム終了フラグ
+        let gameOver = false;
+
+        // 終了処理
+        document.getElementById("endBtn").addEventListener("click", () => {
+            fetch("/end_game", { method: "POST" })
+                .then(() => {
+                    window.location.href = "/goodbye";  // 終了ページへ移動
+            });
+        });
+
+        // 🔁 リセット処理
+        function resetGame() {
+            fetch("/reset_game", { method: "POST" })
+                .then(res => res.json())
+                .then(data => {
+                    gameOver = false;
+                    renderBoard(data);
+                    messagesElement.innerHTML = "";
+                    addMessage("ゲームをリセットしました。");
+                });
+        }
+
+        // ⛔ 終了処理
+        function endGame() {
+            fetch("/end_game", { method: "POST" })
+                .then(res => res.json())
+                .then(data => {
+                    gameOver = true;
+                    renderBoard(data);
+                    addMessage("ゲームを終了しました。");
+                });
+        }
+
+        // 💬 メッセージ表示用の共通関数
+        function addMessage(msg) {
+            const p = document.createElement("p");
+            p.textContent = msg;
+            messagesElement.appendChild(p);
+        }
+
+        // 盤面を描画する関数
+        function renderBoard(state) {
+            boardElement.innerHTML = "";  // 盤面を一旦クリア
+            for (let row = 0; row < 8; row++) {
+                const tr = document.createElement("tr");
+                for (let col = 0; col < 8; col++) {
+                    const td = document.createElement("td");
+                    const cell = state.board[row][col];
+
+                    // 石を置く配置（1: 黒, 2: 白）
+                    if (cell === 1) {
+                        const disc = document.createElement("div");
+                        disc.className = "black";
+                        td.appendChild(disc);
+                    } else if (cell === 2) {
+                        const disc = document.createElement("div");
+                        disc.className = "white";
+                        td.appendChild(disc);
+                    }
+
+                    // マスをクリックしたときの処理
+                    td.addEventListener("click", () => {
+                        if (!gameOver) placeStone(row, col);
+                    });
+
+                    tr.appendChild(td);
+                }
+                boardElement.appendChild(tr);
+            }
+
+            // 手番を表示
+            statusElement.textContent = (state.current_player === 1 ? "黒の番です" : "白の番です");
+        }
+
+        // 効果音再生
+        function playPlaceSound() {
+            const sound = document.getElementById("place-sound");
+            sound.currentTime = 0;  // 巻き戻してから再生
+            sound.play();
+        }
+
+        // 石を置くためのサーバー通信処理
+        function placeStone(row, col) {
+            fetch("/place_stone", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ row, col })
+            })
+            .then(res => res.json())
+            .then(data => {
+                messagesElement.innerHTML = "";
+
+                if (data.success) {
+                    playPlaceSound();  // ←ここで音を鳴らす
+                    // ① 自分の手を即描画
+                    renderBoard(data);
+                    if (data.messages && data.messages.length > 0) {
+                        data.messages.forEach(msg => addMessage(msg));
+                    }
+
+                    gameOver = data.game_over;
+
+                    // ② AIの番なら1秒待ってからAIの手を取得
+                    if (!gameOver && data.current_player === 2) {
+                        const thinking = document.createElement("p");
+                        thinking.textContent = "思考中...";
+                        messagesElement.appendChild(thinking);
+
+                        setTimeout(() => {
+                            fetch("/ai_move", {
+                                method: "POST"
+                            })
+                            .then(res => res.json())
+                            .then(aiData => {
+                                renderBoard(aiData);
+                                playPlaceSound();  // ← AIが置いたあとに音を鳴らす
+                                messagesElement.innerHTML = "";
+                                if (aiData.messages && aiData.messages.length > 0) {
+                                    aiData.messages.forEach(msg => addMessage(msg));
+                                }
+                                gameOver = aiData.game_over;
+                            });
+                        }, 1000);
+                    }
+                }
+            });
+        }
+
+        // ゲーム開始時に初期状態を取得
+        function getInitialState() {
+            fetch("/get_state")
+                .then(res => res.json())
+                .then(data => {
+                    renderBoard(data);
+                });
+        }
+
+        // ページ読み込み時に初期状態を描画
+        window.onload = getInitialState;
+    </script>
+</body>
+</html>
